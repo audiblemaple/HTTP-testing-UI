@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>Device Tracker</title>
+
+<link
+  rel="stylesheet"
+  href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+  crossorigin=""
+/>
+
+<style>
+  body {
+    margin: 0;
+    font-family: system-ui, sans-serif;
+    color: #eee;
+    background: #1a1a1a;
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    grid-template-rows: 100vh;
+  }
+
+  #sidebar {
+    background: #222;
+    padding: 16px;
+    box-sizing: border-box;
+    border-right: 1px solid #444;
+    display: flex;
+    flex-direction: column;
+    row-gap: 12px;
+    overflow-y: auto;
+  }
+
+  #sidebar h1 {
+    font-size: 16px;
+    margin: 0;
+    font-weight: 600;
+    color: #fff;
+  }
+
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: #999;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+  }
+
+  .card {
+    background: #2a2a2a;
+    border: 1px solid #333;
+    border-radius: 10px;
+    padding: 12px;
+    font-size: 13px;
+    line-height: 1.4;
+    color: #ddd;
+    word-break: break-word;
+  }
+
+  .row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
+  .row span.label {
+    color: #aaa;
+    font-size: 12px;
+  }
+  .row span.value {
+    color: #fff;
+    font-family: monospace;
+    font-size: 12px;
+  }
+
+  #status {
+    font-size: 12px;
+    color: #ccc;
+  }
+
+  #map {
+    width: 100%;
+    height: 100%;
+  }
+
+  #footer {
+    font-size: 11px;
+    color: #666;
+    margin-top: auto;
+    text-align: center;
+  }
+
+  /* NEW: style the dropdown a bit */
+  #device-picker {
+    width: 100%;
+    background: #2a2a2a;
+    color: #eee;
+    border: 1px solid #444;
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 13px;
+    font-family: monospace;
+  }
+
+  @media (max-width: 700px) {
+    body {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto 1fr;
+    }
+    #sidebar {
+      border-right: none;
+      border-bottom: 1px solid #444;
+      max-height: 300px;
+    }
+    #map {
+      height: calc(100vh - 300px);
+    }
+  }
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<div id="sidebar">
+  <h1>Device Tracker</h1>
+
+  <!-- NEW: device selector card -->
+  <div class="card">
+    <div class="section-label">Select Device</div>
+    <select id="device-picker">
+      <option value="" disabled selected>Loading…</option>
+    </select>
+  </div>
+
+  <div class="card">
+    <div class="section-label">Device</div>
+    <div class="row"><span class="label">ID</span>        <span class="value" id="info-deviceId">-</span></div>
+    <div class="row"><span class="label">Last RX</span>    <span class="value" id="info-serverReceivedAt">-</span></div>
+    <div class="row"><span class="label">GNSS Time</span>  <span class="value" id="info-timeStamp">-</span></div>
+    <div class="row"><span class="label">Coords</span>     <span class="value" id="info-latlon">-</span></div>
+    <div class="row"><span class="label">Accuracy</span>   <span class="value" id="info-acc">-</span></div>
+  </div>
+
+  <div class="card">
+    <div class="section-label">Health</div>
+    <div class="row"><span class="label">Batt (mV)</span>  <span class="value" id="info-batt">-</span></div>
+    <div class="row"><span class="label">Input (mV)</span> <span class="value" id="info-inp">-</span></div>
+    <div class="row"><span class="label">CPU (°C)</span>   <span class="value" id="info-cpu">-</span></div>
+    <div class="row"><span class="label">Amb (°C)</span>   <span class="value" id="info-amb">-</span></div>
+  </div>
+
+  <div id="status">Loading…</div>
+
+  <div id="footer">Map data © OpenStreetMap contributors</div>
+</div>
+
+<!-- Map -->
+<div id="map"></div>
+
+<script
+  src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+  crossorigin=""
+></script>
+
+<script>
+(async function() {
+  // =======================
+  // CONFIG
+  // =======================
+
+  // your deployed server base URL (Render URL, no trailing slash)
+  const SERVICE_URL = "https://http-testing.onrender.com";
+
+  // how many last points to draw
+  const HISTORY_LIMIT = 100;
+
+  // =======================
+  // DOM refs
+  // =======================
+  const statusEl = document.getElementById("status");
+
+  const infoDeviceId = document.getElementById("info-deviceId");
+  const infoServerReceivedAt = document.getElementById("info-serverReceivedAt");
+  const infoTimeStamp = document.getElementById("info-timeStamp");
+  const infoLatLon = document.getElementById("info-latlon");
+  const infoAcc = document.getElementById("info-acc");
+
+  const infoBatt = document.getElementById("info-batt");
+  const infoInp  = document.getElementById("info-inp");
+  const infoCpu  = document.getElementById("info-cpu");
+  const infoAmb  = document.getElementById("info-amb");
+
+  const devicePicker = document.getElementById("device-picker"); // NEW
+
+  // =======================
+  // Fetch helpers
+  // =======================
+
+  // NEW: get unique device IDs from /api/v1/devices
+  async function fetchDevices() {
+    const url = `${SERVICE_URL}/api/v1/devices`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error("Failed to fetch devices: " + res.status);
+    }
+    const json = await res.json();
+    if (!json.ok) {
+      throw new Error("API error: " + (json.error || "unknown"));
+    }
+    // json.data is an array of strings (deviceIds)
+    return json.data;
+  }
+
+  // same as before, but now takes deviceId
+  async function fetchHistory(deviceId) {
+    const url = `${SERVICE_URL}/api/v1/history?deviceId=${encodeURIComponent(deviceId)}&limit=${HISTORY_LIMIT}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error("Failed to fetch history: " + res.status);
+    }
+    const json = await res.json();
+    if (!json.ok) {
+      throw new Error("API error: " + (json.error || "unknown"));
+    }
+    return json.data; // array of docs, newest first
+  }
+
+  // =======================
+  // Sidebar + Map rendering
+  // =======================
+  function updateSidebar(latest) {
+    if (!latest) {
+      infoDeviceId.textContent        = "-";
+      infoServerReceivedAt.textContent= "-";
+      infoTimeStamp.textContent       = "-";
+      infoLatLon.textContent          = "-";
+      infoAcc.textContent             = "-";
+      infoBatt.textContent            = "-";
+      infoInp.textContent             = "-";
+      infoCpu.textContent             = "-";
+      infoAmb.textContent             = "-";
+
+      statusEl.textContent = "No data for this device.";
+      return;
+    }
+
+    infoDeviceId.textContent         = latest.deviceId || "-";
+    infoServerReceivedAt.textContent = latest.serverReceivedAt || "-";
+    infoTimeStamp.textContent        = latest.timeStamp || "-";
+    infoLatLon.textContent           = (latest.Latitude && latest.Longitude)
+      ? `${latest.Latitude.toFixed(6)}, ${latest.Longitude.toFixed(6)}`
+      : "-";
+    infoAcc.textContent              = latest.Accuracy ?? "-";
+
+    infoBatt.textContent             = latest.batteryVoltage ?? "-";
+    infoInp.textContent              = latest.inputVoltage ?? "-";
+    infoCpu.textContent              = latest.cpuTemp ?? "-";
+    infoAmb.textContent              = latest.ambientTemp ?? "-";
+
+    statusEl.textContent = "OK";
+  }
+
+  // Leaflet map setup (same idea as before)
+  const map = L.map('map', {
+    zoomControl: true,
+    attributionControl: false,
+  });
+
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19
+  }).addTo(map);
+
+  const markersLayer = L.layerGroup().addTo(map);
+  let pathLine = null;
+
+  function drawMapPoints(points) {
+    markersLayer.clearLayers();
+    if (pathLine) {
+      map.removeLayer(pathLine);
+      pathLine = null;
+    }
+
+    if (!points || points.length === 0) {
+      return;
+    }
+
+    // we get newest -> oldest, but for the polyline we want oldest -> newest
+    const ordered = [...points].reverse();
+    const latlngs = ordered.map(p => [p.Latitude, p.Longitude]);
+
+    pathLine = L.polyline(latlngs, {
+      weight: 3
+    }).addTo(map);
+
+    map.fitBounds(pathLine.getBounds(), { padding: [20,20] });
+
+    for (const p of points) {
+      if (typeof p.Latitude !== "number" || typeof p.Longitude !== "number") {
+        continue;
+      }
+
+      const popupHtml = `
+        <div style="font-size:12px; line-height:1.4;">
+          <div><b>Time RX:</b> ${p.serverReceivedAt || "-"}</div>
+          <div><b>GNSS Time:</b> ${p.timeStamp || "-"}</div>
+          <div><b>Lat,Lon:</b> ${p.Latitude.toFixed(6)}, ${p.Longitude.toFixed(6)}</div>
+          <div><b>Accuracy:</b> ${p.Accuracy ?? "-"}</div>
+          <div><b>Battery (mV):</b> ${p.batteryVoltage ?? "-"}</div>
+          <div><b>Input (mV):</b> ${p.inputVoltage ?? "-"}</div>
+          <div><b>CPU (°C):</b> ${p.cpuTemp ?? "-"}</div>
+          <div><b>Ambient (°C):</b> ${p.ambientTemp ?? "-"}</div>
+          <div><b>Msg UUID:</b> ${p.messageUUID || "-"}</div>
+        </div>
+      `;
+
+      const marker = L.marker([p.Latitude, p.Longitude]);
+      marker.bindPopup(popupHtml);
+      marker.addTo(markersLayer);
+    }
+
+    const latest = points[0];
+    if (latest && typeof latest.Latitude === "number" && typeof latest.Longitude === "number") {
+      const latestCircle = L.circleMarker([latest.Latitude, latest.Longitude], {
+        radius: 8,
+        weight: 2
+      });
+      latestCircle.addTo(markersLayer);
+      latestCircle.bindPopup(
+        "<b>Latest point</b><br/>" +
+        (latest.serverReceivedAt || "-") +
+        "<br/>" +
+        latest.Latitude.toFixed(6) + ", " + latest.Longitude.toFixed(6)
+      );
+    }
+  }
+
+  // =======================
+  // High-level flow
+  // =======================
+
+  // NEW: load device IDs, populate dropdown, load first device
+  async function initUI() {
+    statusEl.textContent = "Loading…";
+
+    // 1. get all device IDs
+    let devices = [];
+    try {
+      devices = await fetchDevices();
+    } catch (err) {
+      console.error(err);
+      statusEl.textContent = "Error loading device list";
+      return;
+    }
+
+    // 2. populate dropdown
+    devicePicker.innerHTML = ""; // clear "Loading…"
+    if (!devices || devices.length === 0) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "No devices found";
+      opt.disabled = true;
+      devicePicker.appendChild(opt);
+      statusEl.textContent = "No devices found";
+      return;
+    }
+
+    for (const devId of devices) {
+      const opt = document.createElement("option");
+      opt.value = devId;
+      opt.textContent = devId;
+      devicePicker.appendChild(opt);
+    }
+
+    // pick the first device by default
+    const firstId = devices[0];
+    devicePicker.value = firstId;
+
+    // 3. load its history
+    await loadDevice(firstId);
+
+    // 4. hook change event
+    devicePicker.addEventListener("change", async () => {
+      const picked = devicePicker.value;
+      await loadDevice(picked);
+    });
+  }
+
+  // NEW: helper that fetches + renders one device
+  async function loadDevice(deviceId) {
+    try {
+      const history = await fetchHistory(deviceId); // newest first
+      updateSidebar(history[0]);
+      drawMapPoints(history);
+    } catch (err) {
+      console.error(err);
+      statusEl.textContent = "Error loading data";
+      updateSidebar(null);
+      drawMapPoints([]);
+    }
+  }
+
+  // boot
+  initUI();
+})();
+</script>
+</body>
+</html>
