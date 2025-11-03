@@ -288,15 +288,12 @@
       return;
     }
 
-    // we get newest -> oldest, but for the polyline we want oldest -> newest
+    // Oldest → newest for the path
     const ordered = [...points].reverse();
     const latlngs = ordered.map(p => [p.Latitude, p.Longitude]);
 
-    pathLine = L.polyline(latlngs, {
-      weight: 3
-    }).addTo(map);
-
-    map.fitBounds(pathLine.getBounds(), { padding: [20,20] });
+    pathLine = L.polyline(latlngs, { weight: 3 }).addTo(map);
+    map.fitBounds(pathLine.getBounds(), { padding: [20, 20] });
 
     for (const p of points) {
       if (typeof p.Latitude !== "number" || typeof p.Longitude !== "number") {
@@ -317,18 +314,30 @@
         </div>
       `;
 
-      const marker = L.marker([p.Latitude, p.Longitude]);
+      // Marker at the fix
+      const marker = L.marker([p.Latitude, p.Longitude]).addTo(markersLayer);
       marker.bindPopup(popupHtml);
-      marker.addTo(markersLayer);
+
+      // Accuracy circle in meters (if provided and > 0)
+      const acc = Number(p.Accuracy);
+      if (Number.isFinite(acc) && acc > 0) {
+        const circle = L.circle([p.Latitude, p.Longitude], {
+          radius: acc,       // meters
+          weight: 1,
+          opacity: 0.7,
+          fillOpacity: 0.08
+        }).addTo(markersLayer);
+        circle.bindPopup(popupHtml);
+      }
     }
 
+    // Highlight the most recent point
     const latest = points[0];
     if (latest && typeof latest.Latitude === "number" && typeof latest.Longitude === "number") {
       const latestCircle = L.circleMarker([latest.Latitude, latest.Longitude], {
         radius: 8,
         weight: 2
-      });
-      latestCircle.addTo(markersLayer);
+      }).addTo(markersLayer);
       latestCircle.bindPopup(
         "<b>Latest point</b><br/>" +
         (latest.serverReceivedAt || "-") +
