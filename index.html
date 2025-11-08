@@ -135,6 +135,16 @@
     </select>
   </div>
 
+  <div class="section-label" style="margin-top:12px;">Last Reports</div>
+  <select id="history-limit" style="width:100%; background:#2a2a2a; color:#eee; border:1px solid #444; border-radius:6px; padding:6px 8px; font-size:13px; font-family:monospace;">
+    <option value="5" selected >Last 5</option>
+    <option value="10">Last 10</option>
+    <option value="25">Last 25</option>
+    <option value="50">Last 50</option>
+    <option value="100">Last 100</option>
+    <option value="0">All</option>
+  </select>
+
   <div class="card">
     <div class="section-label">Device</div>
     <div class="row"><span class="label">ID</span>        <span class="value" id="info-deviceId">-</span></div>
@@ -142,6 +152,7 @@
     <div class="row"><span class="label">GNSS Time</span>  <span class="value" id="info-timeStamp">-</span></div>
     <div class="row"><span class="label">Coords</span>     <span class="value" id="info-latlon">-</span></div>
     <div class="row"><span class="label">Accuracy</span>   <span class="value" id="info-acc">-</span></div>
+    <div class="row"><span class="label">Method</span> <span class="value" id="info-locmethod">-</span></div>
   </div>
 
   <div class="card">
@@ -173,10 +184,10 @@
   // =======================
 
   // your deployed server base URL (Render URL, no trailing slash)
-  const SERVICE_URL = "https://http-testing.onrender.com";
+  const SERVICE_URL = "http://194.164.164.110:3000";
 
   // how many last points to draw
-  const HISTORY_LIMIT = 100;
+  let historyLimit = 10; // default selection
 
   // =======================
   // DOM refs
@@ -188,6 +199,7 @@
   const infoTimeStamp = document.getElementById("info-timeStamp");
   const infoLatLon = document.getElementById("info-latlon");
   const infoAcc = document.getElementById("info-acc");
+  const infoLocMethod = document.getElementById("info-locmethod");
 
   const infoBatt = document.getElementById("info-batt");
   const infoInp  = document.getElementById("info-inp");
@@ -215,9 +227,11 @@
     return json.data;
   }
 
-  // same as before, but now takes deviceId
+
   async function fetchHistory(deviceId) {
-    const url = `${SERVICE_URL}/api/v1/history?deviceId=${encodeURIComponent(deviceId)}&limit=${HISTORY_LIMIT}`;
+    const limitParam = historyLimit > 0 ? `&limit=${historyLimit}` : "";
+    const url = `${SERVICE_URL}/api/v1/history?deviceId=${encodeURIComponent(deviceId)}${limitParam}`;
+
     const res = await fetch(url);
     if (!res.ok) {
       throw new Error("Failed to fetch history: " + res.status);
@@ -239,6 +253,7 @@
       infoTimeStamp.textContent       = "-";
       infoLatLon.textContent          = "-";
       infoAcc.textContent             = "-";
+      infoLocMethod.textContent       = "-";
       infoBatt.textContent            = "-";
       infoInp.textContent             = "-";
       infoCpu.textContent             = "-";
@@ -249,13 +264,13 @@
     }
 
     infoDeviceId.textContent         = latest.deviceId || "-";
-    infoServerReceivedAt.textContent = latest.serverReceivedAt || "-";
-    infoTimeStamp.textContent        = latest.timeStamp || "-";
+    infoServerReceivedAt.textContent = formatLocalTime(latest.serverReceivedAt);
+    infoTimeStamp.textContent        = formatLocalTime(latest.timeStamp);
     infoLatLon.textContent           = (latest.Latitude && latest.Longitude)
       ? `${latest.Latitude.toFixed(6)}, ${latest.Longitude.toFixed(6)}`
       : "-";
     infoAcc.textContent              = latest.Accuracy ?? "-";
-
+    infoLocMethod.textContent = latest.LocationMethod ?? "-";
     infoBatt.textContent             = latest.batteryVoltage ?? "-";
     infoInp.textContent              = latest.inputVoltage ?? "-";
     infoCpu.textContent              = latest.cpuTemp ?? "-";
@@ -306,6 +321,7 @@
           <div><b>GNSS Time:</b> ${p.timeStamp || "-"}</div>
           <div><b>Lat,Lon:</b> ${p.Latitude.toFixed(6)}, ${p.Longitude.toFixed(6)}</div>
           <div><b>Accuracy:</b> ${p.Accuracy ?? "-"}</div>
+          <div><b>Method:</b> ${p.LocationMethod ?? "-"}</div>
           <div><b>Battery (mV):</b> ${p.batteryVoltage ?? "-"}</div>
           <div><b>Input (mV):</b> ${p.inputVoltage ?? "-"}</div>
           <div><b>CPU (°C):</b> ${p.cpuTemp ?? "-"}</div>
@@ -345,6 +361,20 @@
         latest.Latitude.toFixed(6) + ", " + latest.Longitude.toFixed(6)
       );
     }
+  }
+
+  function formatLocalTime(ts) {
+    if (!ts) return "-";
+    const d = new Date(ts);
+    return d.toLocaleString("en-US", {
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, // user's timezone
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    });
   }
 
   // =======================
@@ -393,6 +423,12 @@
 
     // 4. hook change event
     devicePicker.addEventListener("change", async () => {
+      const picked = devicePicker.value;
+      await loadDevice(picked);
+    });
+
+    document.getElementById("history-limit").addEventListener("change", async (e) => {
+      historyLimit = Number(e.target.value);
       const picked = devicePicker.value;
       await loadDevice(picked);
     });
