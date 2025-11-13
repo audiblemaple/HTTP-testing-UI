@@ -76,6 +76,12 @@
     font-size: 12px;
   }
 
+  #PlotButton {
+    background-color: #555555;
+    color: #ccc;
+    height: 30px;
+  }
+
   #status {
     font-size: 12px;
     color: #ccc;
@@ -147,12 +153,13 @@
 
   <div class="card">
     <div class="section-label">Device</div>
-    <div class="row"><span class="label">ID</span>        <span class="value" id="info-deviceId">-</span></div>
+    <div class="row"><span class="label">ID</span>         <span class="value" id="info-deviceId">-</span></div>
     <div class="row"><span class="label">Last RX</span>    <span class="value" id="info-serverReceivedAt">-</span></div>
     <div class="row"><span class="label">GNSS Time</span>  <span class="value" id="info-timeStamp">-</span></div>
     <div class="row"><span class="label">Coords</span>     <span class="value" id="info-latlon">-</span></div>
     <div class="row"><span class="label">Accuracy</span>   <span class="value" id="info-acc">-</span></div>
-    <div class="row"><span class="label">Method</span> <span class="value" id="info-locmethod">-</span></div>
+    <div class="row"><span class="label">Method</span>     <span class="value" id="info-locmethod">-</span></div>
+    <div class="row"><span class="label">UpTime</span>     <span class="value" id="info-uptime">-</span></div>
   </div>
 
   <div class="card">
@@ -162,6 +169,8 @@
     <div class="row"><span class="label">CPU (°C)</span>   <span class="value" id="info-cpu">-</span></div>
     <div class="row"><span class="label">Amb (°C)</span>   <span class="value" id="info-amb">-</span></div>
   </div>
+
+  <button onclick="location.href = 'http://wasteradar.website/plot/';" id="PlotButton" class="float-left submit-button" >Battery Plot</button>
 
   <div id="status">Loading…</div>
 
@@ -205,6 +214,8 @@
   const infoInp  = document.getElementById("info-inp");
   const infoCpu  = document.getElementById("info-cpu");
   const infoAmb  = document.getElementById("info-amb");
+  const upTime  = document.getElementById("info-uptime");
+
 
   const devicePicker = document.getElementById("device-picker"); // NEW
 
@@ -227,6 +238,41 @@
     return json.data;
   }
 
+  // Compute weighted average of lat/lon for the given points.
+  // Weight = (GNSS? 2 : 1) * (1 / max(Accuracy, 1))
+  // - Smaller Accuracy => larger weight.
+  // - Missing/invalid Accuracy => treated as very low weight (1/9999).
+  function computeWeightedAverage(points) {
+    let sumW = 0;
+    let sumLat = 0;
+    let sumLon = 0;
+    let used = 0;
+
+    for (const p of points) {
+      const lat = Number(p?.Latitude);
+      const lon = Number(p?.Longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+
+      let acc = Number(p?.Accuracy);
+      let accIsValid = Number.isFinite(acc) && acc > 0;
+      // If accuracy is invalid, give it a very tiny weight
+      // so it doesn't dominate but can still contribute slightly.
+      const accForWeight = accIsValid ? Math.max(acc, 1) : 9999;
+
+      let base = 1 / accForWeight;
+      // Double the weight for GNSS
+      const method = (p?.LocationMethod || "").toUpperCase();
+      if (method === "GNSS") base *= 2;
+
+      sumW += base;
+      sumLat += lat * base;
+      sumLon += lon * base;
+      used++;
+    }
+
+    if (sumW === 0 || used === 0) return null;
+    return { lat: sumLat / sumW, lon: sumLon / sumW, used };
+  }
 
   async function fetchHistory(deviceId) {
     const limitParam = historyLimit > 0 ? `&limit=${historyLimit}` : "";
@@ -258,7 +304,7 @@
       infoInp.textContent             = "-";
       infoCpu.textContent             = "-";
       infoAmb.textContent             = "-";
-
+      upTime.textContent              = "-";
       statusEl.textContent = "No data for this device.";
       return;
     }
@@ -275,6 +321,7 @@
     infoInp.textContent              = latest.inputVoltage ?? "-";
     infoCpu.textContent              = latest.cpuTemp ?? "-";
     infoAmb.textContent              = latest.ambientTemp ?? "-";
+    upTime.textContent              = latest.upTime ?? "-";
 
     statusEl.textContent = "OK";
   }
@@ -317,8 +364,8 @@
 
       const popupHtml = `
         <div style="font-size:12px; line-height:1.4;">
-          <div><b>Time RX:</b> ${p.serverReceivedAt || "-"}</div>
-          <div><b>GNSS Time:</b> ${p.timeStamp || "-"}</div>
+          <div><b>Time RX:</b> ${formatLocalTime(p.serverReceivedAt) || "-"}</div>
+          <div><b>GNSS Time:</b> ${ formatLocalTime(p.timeStamp) || "-"}</div>
           <div><b>Lat,Lon:</b> ${p.Latitude.toFixed(6)}, ${p.Longitude.toFixed(6)}</div>
           <div><b>Accuracy:</b> ${p.Accuracy ?? "-"}</div>
           <div><b>Method:</b> ${p.LocationMethod ?? "-"}</div>
@@ -327,6 +374,7 @@
           <div><b>CPU (°C):</b> ${p.cpuTemp ?? "-"}</div>
           <div><b>Ambient (°C):</b> ${p.ambientTemp ?? "-"}</div>
           <div><b>Msg UUID:</b> ${p.messageUUID || "-"}</div>
+          <div><b>UptTime</b> ${p.UptTime || "-"}</div>
         </div>
       `;
 
@@ -361,6 +409,36 @@
         latest.Latitude.toFixed(6) + ", " + latest.Longitude.toFixed(6)
       );
     }
+
+    // --- Weighted-average marker of the currently shown points ---
+    const avg = computeWeightedAverage(points);
+    if (avg) {
+
+      // Orange icon for average
+      const avgIcon = L.icon({
+        iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png",
+        shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        popupAnchor: [1, -34],
+        shadowSize: [41, 41]
+      });
+
+      const avgMarker = L.marker([avg.lat, avg.lon], { icon: avgIcon })
+        .addTo(markersLayer);
+
+      avgMarker.bindPopup(
+        `<div style="font-size:12px; line-height:1.4;">
+          <b>Weighted average (center)</b><br/>
+          Based on last ${points.length} report(s)<br/>
+          Lat,Lon: ${avg.lat.toFixed(6)}, ${avg.lon.toFixed(6)}<br/>
+          Weights: <br/>
+          - LocationMethod = GNSS → ×2 weight<br/>
+          - Higher Accuracy → higher weight (1/Accuracy)
+        </div>`
+      );
+    }
+
   }
 
   function formatLocalTime(ts) {
@@ -418,7 +496,11 @@
     const firstId = devices[0];
     devicePicker.value = firstId;
 
-    // 3. load its history
+    // read the current selected limit from dropdown on page load
+    const historySelect = document.getElementById("history-limit");
+    historyLimit = Number(historySelect.value);
+
+    // load its history using the selected limit
     await loadDevice(firstId);
 
     // 4. hook change event
